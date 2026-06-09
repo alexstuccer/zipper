@@ -146,7 +146,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">Decompressione ricorsiva</p>
+  <p class="eyebrow">Decompressione ricorsiva · <span style="color:var(--accent)">v6</span></p>
   <h1>Estrattore ZIP annidati</h1>
   <p class="lede">Apre uno ZIP che ne contiene altri, ricorre fino in fondo e ricostruisce la gerarchia di cartelle e file. Accorcia automaticamente i nomi e i percorsi troppo lunghi che mandano in errore l'estrazione su Windows (limite <code>MAX_PATH</code>).</p>
 
@@ -303,7 +303,7 @@ function asciiFallback(name,isFile){
   base=base.replace(/[^A-Za-z0-9._-]/g,"_").replace(/^[ ._]+|[ .]+$/g,"");
   ext=ext.replace(/[^A-Za-z0-9.]/g,"");
   if(!base) base=(isFile?"file_":"cartella_")+hash4(name);
-  return (base.slice(0,80)+ext) || ("x_"+hash4(name));
+  return fsSafe((base.slice(0,80)+ext)) || ("x_"+hash4(name));
 }
 function truncName(name,cap,isFile){
   if(name.length<=cap) return name;

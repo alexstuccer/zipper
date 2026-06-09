@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estrattore ZIP annidati</title>
+<script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2/dist/zip-full.min.js"
+        onerror="var s=document.createElement('script');s.src='https://unpkg.com/@zip.js/zip.js@2/dist/zip-full.min.js';document.head.appendChild(s);"></script>
+<style>
+  :root{
+    --ink:#14161a; --panel:#1d2027; --panel2:#23272f; --border:#2e333d;
+    --text:#e8eaed; --muted:#9aa1ad; --faint:#6b7280;
+    --accent:#e8a33d; --accent-press:#d4912f;
+    --ok:#5fb87a; --warn:#e8a33d; --err:#e5736b;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:
+      radial-gradient(900px 500px at 50% -10%, #1b2330 0%, var(--ink) 55%) fixed,
+      var(--ink);
+    color:var(--text); font-family:var(--sans);
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+    padding:48px 20px 80px;
+  }
+  .wrap{max-width:780px;margin:0 auto}
+  .eyebrow{
+    font:600 11px/1 var(--mono); letter-spacing:.22em; text-transform:uppercase;
+    color:var(--faint); margin:0 0 10px;
+  }
+  h1{
+    font-weight:700; font-size:clamp(26px,4.5vw,38px); letter-spacing:-.02em;
+    margin:0 0 6px;
+  }
+  .lede{color:var(--muted); font-size:15px; margin:0 0 36px; max-width:60ch}
+  .lede code{font-family:var(--mono);font-size:.86em;color:var(--accent)}
+
+  section{margin-bottom:22px}
+  .lab{font:600 11px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+
+  /* drop zone — l'azione caratteristica */
+  .drop{
+    border:1.5px dashed var(--border); border-radius:14px; background:var(--panel);
+    padding:38px 24px; text-align:center; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  .drop:hover{border-color:#3c4350}
+  .drop.over{border-color:var(--accent); background:#221f17}
+  .drop.loaded{border-style:solid; border-color:#3c4350; text-align:left; cursor:default}
+  .drop-title{font-size:16px;font-weight:600}
+  .drop-sub{color:var(--muted);font-size:13.5px;margin-top:6px}
+  .filechip{display:flex;align-items:center;gap:14px}
+  .filechip .ic{width:40px;height:40px;flex:none;border-radius:9px;background:#2a2e1c;color:var(--accent);
+    display:grid;place-items:center;font:700 13px var(--mono)}
+  .filechip .nm{font-family:var(--mono);font-size:13.5px;word-break:break-all}
+  .filechip .mt{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .filechip .x{margin-left:auto;flex:none;background:none;border:none;color:var(--faint);cursor:pointer;
+    font:600 12px var(--mono);padding:6px 8px;border-radius:6px}
+  .filechip .x:hover{color:var(--text);background:var(--panel2)}
+
+  /* regole */
+  .rules{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:6px 18px}
+  .row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:none}
+  .row .txt{flex:1;min-width:0}
+  .row .t1{font-size:14px;font-weight:600}
+  .row .t2{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .num{width:78px;flex:none;background:var(--ink);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:8px 10px;font:600 14px var(--mono);text-align:center}
+  .num:focus{outline:none;border-color:var(--accent)}
+  /* toggle */
+  .sw{position:relative;width:44px;height:25px;flex:none;cursor:pointer}
+  .sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+  .sw .tr{position:absolute;inset:0;background:var(--panel2);border:1px solid var(--border);border-radius:999px;transition:.15s}
+  .sw .kn{position:absolute;top:3px;left:3px;width:17px;height:17px;border-radius:50%;background:var(--faint);transition:.15s}
+  .sw input:checked + .tr{background:#3a3320;border-color:var(--accent)}
+  .sw input:checked + .tr + .kn,.sw input:checked ~ .kn{transform:translateX(19px);background:var(--accent)}
+
+  /* azione */
+  .go{width:100%;border:none;border-radius:12px;padding:16px;font:700 15px var(--sans);
+    background:var(--accent);color:#1a1407;cursor:pointer;transition:.12s;letter-spacing:.01em}
+  .go:hover:not(:disabled){background:var(--accent-press)}
+  .go:disabled{opacity:.4;cursor:not-allowed}
+  .hint{color:var(--faint);font-size:12.5px;text-align:center;margin-top:10px}
+
+  /* progress */
+  .prog{display:none;margin-top:18px}
+  .prog.on{display:block}
+  .bar{height:8px;background:var(--panel2);border-radius:999px;overflow:hidden;border:1px solid var(--border)}
+  .bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+  .prog .st{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:8px;display:flex;justify-content:space-between}
+  .prog.indet .bar > i{width:35%;background:var(--accent);animation:indet 1.1s ease-in-out infinite}
+  @keyframes indet{0%{margin-left:-35%}100%{margin-left:100%}}
+
+  /* esito */
+  .out{display:none}
+  .out.on{display:block}
+  .banner{display:flex;align-items:center;gap:12px;border-radius:12px;padding:14px 16px;margin-bottom:18px;font-size:14px}
+  .banner.ok{background:#16241b;border:1px solid #2c4a36;color:#bfe6cd}
+  .banner.warn{background:#241f12;border:1px solid #4a3f20;color:#ecd9b0}
+  .banner.err{background:#241616;border:1px solid #4a2c2c;color:#eebcbc}
+  .banner .bic{font:700 14px var(--mono);flex:none}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:14px}
+  .stat .v{font:700 24px/1 var(--mono);letter-spacing:-.02em}
+  .stat .k{color:var(--muted);font-size:11.5px;margin-top:6px}
+  .stat.flag .v{color:var(--accent)}
+
+  .logwrap{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .loghead{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:10px}
+  .loghead h3{margin:0;font-size:14px}
+  .loghead .c{color:var(--faint);font:600 12px var(--mono)}
+  .loglist{max-height:440px;overflow:auto}
+  .li{padding:13px 16px;border-bottom:1px solid var(--border)}
+  .li:last-child{border-bottom:none}
+  .li .top{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .chip{font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border-radius:5px;flex:none}
+  .chip.dir{background:#1f2733;color:#8fb6e6}
+  .chip.file{background:#2a2e1c;color:var(--accent)}
+  .li .names{font-family:var(--mono);font-size:12px;min-width:0}
+  .li .o{color:var(--faint);word-break:break-all}
+  .li .n{color:var(--text);word-break:break-all}
+  .li .arr{color:var(--faint)}
+  /* meter — la firma: lunghezza percorso vs limite MAX_PATH */
+  .meter{margin-top:9px;position:relative;height:auto}
+  .mline{position:relative;height:7px;background:var(--ink);border-radius:4px;overflow:hidden;margin:5px 0}
+  .mline > i{display:block;height:100%}
+  .mline.old > i{background:linear-gradient(90deg,#5a4a2a,var(--err))}
+  .mline.new > i{background:var(--ok)}
+  .mlimit{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--accent);opacity:.7}
+  .mlbl{display:flex;justify-content:space-between;font:600 10px var(--mono);color:var(--faint)}
+
+  .empty{color:var(--muted);font-size:13.5px;padding:20px 16px}
+  a.dl{color:var(--accent);text-decoration:none;font-weight:600}
+  a.dl:hover{text-decoration:underline}
+
+  @media (max-width:560px){
+    .stats{grid-template-columns:repeat(2,1fr)}
+    body{padding:32px 14px 60px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Decompressione ricorsiva</p>
+  <h1>Estrattore ZIP annidati</h1>
+  <p class="lede">Apre uno ZIP che ne contiene altri, ricorre fino in fondo e ricostruisce la gerarchia di cartelle e file. Accorcia automaticamente i nomi e i percorsi troppo lunghi che mandano in errore l'estrazione su Windows (limite <code>MAX_PATH</code>).</p>
+
+  <section>
+    <p class="lab">Sorgente</p>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Trascina o seleziona lo ZIP">
+      <div id="dropEmpty">
+        <div class="drop-title">Trascina qui lo ZIP</div>
+        <div class="drop-sub">oppure premi per selezionarlo dal disco</div>
+      </div>
+      <div class="filechip" id="dropFile" hidden>
+        <div class="ic">ZIP</div>
+        <div style="min-width:0">
+          <div class="nm" id="fName"></div>
+          <div class="mt" id="fMeta"></div>
+        </div>
+        <button class="x" id="fClear" title="Rimuovi">RIMUOVI</button>
+      </div>
+    </div>
+    <input type="file" id="file" accept=".zip,application/zip" hidden>
+  </section>
+
+  <section>
+    <p class="lab">Regole di rinomina</p>
+    <div class="rules">
+      <div class="row">
+        <div class="txt">
+          <div class="t1">Lunghezza max per nome</div>
+          <div class="t2">Singolo nome di file o cartella. Oltre, viene troncato mantenendo l'estensione.</div>
+        </div>
+        <input class="num" id="maxComp" type="number" min="8" max="255" value="100">
+      </div>
+      <div class="row">
+        <div class="txt">
+          <div class="t1">Lunghezza max percorso</div>
+          <div class="t2">Percorso relativo completo. Conta a partire dalla cartella che scegli.</div>
+        </div>
+        <input class="num" id="maxTotal" type="number" min="40" max="400" value="200">
+      </div>
+      <div class="row">
+        <div class="txt">
+          <div class="t1">Correggi caratteri non validi</div>
+          <div class="t2">Sostituisce <span style="font-family:var(--mono)">\ / : * ? " &lt; &gt; |</span> e i nomi riservati di Windows.</div>
+        </div>
+        <label class="sw"><input type="checkbox" id="sanitize" checked><span class="tr"></span><span class="kn"></span></label>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <button class="go" id="go" disabled>Carica prima uno ZIP</button>
+    <p class="hint" id="goHint"></p>
+    <div class="prog" id="prog">
+      <div class="bar"><i id="progFill"></i></div>
+      <div class="st"><span id="progLbl">In lavorazione…</span><span id="progPct">0%</span></div>
+    </div>
+  </section>
+
+  <section class="out" id="out">
+    <p class="lab">Esito</p>
+    <div class="banner" id="banner"><span class="bic">i</span><span id="bannerTxt"></span></div>
+    <div class="stats" id="stats"></div>
+    <div class="logwrap">
+      <div class="loghead">
+        <h3>Rinominati</h3>
+        <span class="c" id="logCount"></span>
+      </div>
+      <div class="loglist" id="loglist"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const dropEl=$("drop"), fileInput=$("file");
+let pickedFile=null, pickedHandle=null;
+
+function friendlyRead(err){
+  const m=(err&&err.message)||String(err);
+  if(/allocation failed|out of memory|RangeError/i.test(m))
+    return "L'archivio è troppo grande per essere caricato tutto in memoria dal browser.";
+  if(/permission|could not be read|NotReadable/i.test(m))
+    return "Windows non lascia leggere il file: di solito è bloccato da un altro programma (un gestore di archivi o l'antivirus che lo sta scansionando) o è ancora in sincronizzazione.";
+  return m;
+}
+
+/* ---------- selezione file (lettura rinviata all'estrazione) ---------- */
+async function setFile(f,handle){
+  if(!f) return;
+  if(!/\.zip$/i.test(f.name)){ flashError("Quello non è un file .zip."); return; }
+  pickedFile=f; pickedHandle=handle||null;
+  $("dropEmpty").hidden=true; $("dropFile").hidden=false; dropEl.classList.add("loaded");
+  $("fName").textContent=f.name;
+  $("fMeta").textContent=fmtBytes(f.size);
+  resetOutput(); refreshGo();
+}
+function clearFile(){
+  pickedFile=null; pickedHandle=null;
+  $("dropEmpty").hidden=false; $("dropFile").hidden=true; dropEl.classList.remove("loaded");
+  fileInput.value=""; resetOutput(); refreshGo();
+}
+const HAS_OPEN = typeof window.showOpenFilePicker === "function";
+async function openViaPicker(){
+  try{
+    const [h]=await window.showOpenFilePicker({multiple:false,types:[{description:"Archivio ZIP",accept:{"application/zip":[".zip"],"application/x-zip-compressed":[".zip"]}}]});
+    if(!h) return;
+    const f=await h.getFile();
+    await setFile(f,h);
+  }catch(e){ /* annullato */ }
+}
+function chooseFile(){ if(HAS_OPEN) openViaPicker(); else fileInput.click(); }
+dropEl.addEventListener("click",e=>{ if(e.target.closest("#fClear"))return; if(!pickedFile)chooseFile(); });
+dropEl.addEventListener("keydown",e=>{ if((e.key==="Enter"||e.key===" ")&&!pickedFile){e.preventDefault();chooseFile();} });
+fileInput.addEventListener("change",e=>setFile(e.target.files[0]));
+$("fClear").addEventListener("click",clearFile);
+["dragenter","dragover"].forEach(ev=>dropEl.addEventListener(ev,e=>{e.preventDefault();dropEl.classList.add("over");}));
+["dragleave","drop"].forEach(ev=>dropEl.addEventListener(ev,e=>{e.preventDefault();if(ev==="dragleave"&&dropEl.contains(e.relatedTarget))return;dropEl.classList.remove("over");}));
+dropEl.addEventListener("drop",e=>{ const f=e.dataTransfer.files[0]; if(f)setFile(f); });
+
+
+const HAS_FS = typeof window.showDirectoryPicker === "function";
+function refreshGo(){
+  const btn=$("go");
+  const ready=!!pickedFile;
+  btn.disabled=!ready;
+  if(!ready){ btn.textContent="Carica prima uno ZIP"; $("goHint").textContent=""; return; }
+  if(HAS_FS){ btn.textContent="Scegli una cartella ed estrai"; $("goHint").textContent="I file vengono scritti direttamente nella cartella, mantenendo la gerarchia."; }
+  else { btn.textContent="Estrai e scarica lo ZIP corretto"; $("goHint").textContent="Questo browser non consente la scrittura su cartella: verrà generato uno ZIP già rinominato da estrarre normalmente. (Usa Chrome o Edge per scrivere su cartella.)"; }
+}
+refreshGo();
+
+/* ---------- utilità ---------- */
+function fmtBytes(n){ if(n<1024)return n+" B"; if(n<1048576)return (n/1024).toFixed(1)+" KB"; if(n<1073741824)return (n/1048576).toFixed(1)+" MB"; return (n/1073741824).toFixed(2)+" GB"; }
+function hash4(s){ let h=0x811c9dc5; for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,0x01000193);} return (h>>>0).toString(36).slice(0,4).padStart(4,"0"); }
+function splitExt(name){ const i=name.lastIndexOf("."); if(i<=0)return[name,""]; const ext=name.slice(i); return ext.length>12?[name,""]:[name.slice(0,i),ext]; }
+const RESERVED=/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+function sanitize(name){
+  let n=name.replace(/[<>:"/\\|?*\x00-\x1f]/g,"_").replace(/[ .]+$/,"");
+  if(RESERVED.test(n)) n="_"+n;
+  return n||"_";
+}
+function truncName(name,cap,isFile){
+  if(name.length<=cap) return name;
+  let base=name, ext="";
+  if(isFile){ [base,ext]=splitExt(name); }
+  const tag="~"+hash4(name);
+  const keep=Math.max(1, cap-ext.length-tag.length);
+  return base.slice(0,keep)+tag+ext;
+}
+function correctName(orig,isFile,opt){
+  let n=orig;
+  if(opt.sanitize) n=sanitize(n);
+  n=truncName(n,opt.maxComp,isFile);
+  return n;
+}
+function fitTotal(name,available,orig){
+  if(name.length<=available) return name;
+  let [base,ext]=splitExt(name);
+  const tag="~"+hash4(orig);
+  if(available<=ext.length+tag.length+1) return (tag+ext).slice(0,Math.max(1,available));
+  return base.slice(0,Math.max(1,available-ext.length-tag.length))+tag+ext;
+}
+function ensureUnique(name,used){
+  if(!used.has(name.toLowerCase())) return name;
+  const [base,ext]=splitExt(name);
+  let i=2; while(used.has((base+"_"+i+ext).toLowerCase())) i++;
+  return base+"_"+i+ext;
+}
+
+/* ---------- motore streaming (zip.js): accesso casuale + scrittura per file ---------- */
+// reg: chiave = percorso ORIGINALE della cartella ('' = radice, con '/' finale)
+//      valore = { used:Set(nomi finali lowercase), rel:percorso finale, finalName }
+function newRun(dirHandle){
+  return {
+    dirHandle,
+    reg:new Map([["",{used:new Set(),rel:"",finalName:""}]]),
+    dirHandles:new Map([["",dirHandle]]),
+    zipWriter:dirHandle?null:new zip.ZipWriter(new zip.BlobWriter("application/zip")),
+    log:[], files:0, zips:0
+  };
+}
+async function resolveDir(ctx,origComps,opt){
+  let parentKey="", parent=ctx.reg.get("");
+  for(const orig of origComps){
+    const key=parentKey+orig+"/";
+    let entry=ctx.reg.get(key);
+    if(!entry){
+      let nm=correctName(orig,false,opt);
+      nm=ensureUnique(nm,parent.used); parent.used.add(nm.toLowerCase());
+      const rel=parent.rel?parent.rel+"/"+nm:nm;
+      entry={used:new Set(),rel,finalName:nm};
+      ctx.reg.set(key,entry);
+      if(nm!==orig) ctx.log.push({type:"dir",o:parentKey+orig,n:rel});
+    }
+    if(ctx.dirHandle && !ctx.dirHandles.has(entry.rel)){
+      const ph=ctx.dirHandles.get(parent.rel);
+      ctx.dirHandles.set(entry.rel, await ph.getDirectoryHandle(entry.finalName,{create:true}));
+    }
+    parentKey=key; parent=entry;
+  }
+  return parent;
+}
+async function emitBlob(ctx,origComps,origName,origFull,blob,opt){
+  const parent=await resolveDir(ctx,origComps,opt);
+  let nm=correctName(origName,true,opt);
+  const fitted=fitTotal(nm,opt.maxTotal-parent.rel.length-1,origName);
+  if(fitted!==nm) nm=fitted;
+  nm=ensureUnique(nm,parent.used); parent.used.add(nm.toLowerCase());
+  const rel=parent.rel?parent.rel+"/"+nm:nm;
+  if(nm!==origName) ctx.log.push({type:"file",o:origFull,n:rel});
+  if(ctx.dirHandle){
+    const dh=ctx.dirHandles.get(parent.rel);
+    const fh=await dh.getFileHandle(nm,{create:true});
+    const w=await fh.createWritable(); await w.write(blob); await w.close();
+  }else{
+    await ctx.zipWriter.add(rel, new zip.BlobReader(blob));
+  }
+  ctx.files++;
+  if(ctx.files===1||ctx.files%5===0) $("progLbl").textContent="Estrazione… "+ctx.files+" file";
+}
+// processa le voci di un archivio (lista piatta con percorsi completi)
+async function processEntries(ctx,entries,prefixComps,opt){
+  for(const entry of entries){
+    if(entry.directory) continue;
+    const comps=entry.filename.split("/").filter(Boolean);
+    const fname=comps.pop();
+    if(fname===undefined) continue;
+    const dirComps=prefixComps.concat(comps);
+    const origFull=(prefixComps.length?prefixComps.join("/")+"/":"")+entry.filename;
+    // estrae il singolo file (solo questo tenuto in memoria); poi lo scrive
+    const blob=await entry.getData(new zip.BlobWriter());
+    if(/\.zip$/i.test(fname)){
+      let innerReader=new zip.ZipReader(new zip.BlobReader(blob));
+      let innerEntries=null;
+      try{ innerEntries=await innerReader.getEntries(); }catch(e){ innerEntries=null; }
+      if(innerEntries){
+        ctx.zips++;
+        await processEntries(ctx,innerEntries,dirComps.concat([fname.replace(/\.zip$/i,"")]),opt);
+        try{ await innerReader.close(); }catch(e){}
+      }else{
+        await emitBlob(ctx,dirComps,fname,origFull,blob,opt); // zip illeggibile/protetto: file
+      }
+    }else{
+      await emitBlob(ctx,dirComps,fname,origFull,blob,opt);
+    }
+  }
+}
+function buildReport(log,info){
+  let t="Rapporto rinomina — Estrattore ZIP annidati\n";
+  t+="Sorgente: "+info.src+"\n";
+  t+="File estratti: "+info.files+" | ZIP annidati: "+info.zips+" | Rinominati: "+log.length+"\n";
+  t+="Regole: max nome="+info.maxComp+", max percorso="+info.maxTotal+", correzione caratteri="+(info.sanitize?"sì":"no")+"\n";
+  t+="".padEnd(60,"-")+"\n\n";
+  for(const e of log){ t+="["+(e.type==="dir"?"CARTELLA":"FILE")+"]\n  da : "+e.o+"\n  a  : "+e.n+"\n\n"; }
+  if(!log.length) t+="Nessun nome ha richiesto modifiche.\n";
+  return t;
+}
+
+/* ---------- orchestrazione ---------- */
+$("go").addEventListener("click",run);
+// Verifica con un mini round-trip quale modalità codec funziona, prima del lavoro vero
+async function pickCodecMode(){
+  async function probe(){
+    const w=new zip.ZipWriter(new zip.BlobWriter("application/zip"));
+    await w.add("t",new zip.TextReader("ok"));
+    const b=await w.close();
+    const r=new zip.ZipReader(new zip.BlobReader(b));
+    const es=await r.getEntries();
+    const out=await es[0].getData(new zip.TextWriter());
+    await r.close();
+    return out==="ok";
+  }
+  zip.configure({useWebWorkers:true});
+  try{ if(await probe()) return; }catch(e){}
+  zip.configure({useWebWorkers:false});  // garantita ovunque (più lenta)
+  try{ await probe(); }catch(e){}
+}
+async function run(){
+  if(!pickedFile) return;
+  if(typeof zip==="undefined"){ flashError("Libreria zip.js non caricata: la prima volta che apri l'app serve la connessione a internet. Ricarica la pagina online e riprova."); return; }
+  await pickCodecMode();  // multi-core se i web worker partono, altrimenti thread singolo
+
+  // Senza scrittura su cartella si dovrebbe ricostruire uno ZIP in memoria: impossibile per file enormi.
+  if(!HAS_FS && pickedFile.size>1.5*1024*1024*1024){
+    const why = (location.protocol==="file:")
+      ? "Stai aprendo l'app con un doppio clic (file://): in questa modalità i browser disattivano la scrittura diretta su cartella."
+      : "Questo browser non supporta la scrittura diretta su cartella (serve Chrome o Edge).";
+    flashError(why+" Per un archivio da "+fmtBytes(pickedFile.size)+" serve quella modalità. Apri l'app da un piccolo server locale in Chrome/Edge: nella cartella che contiene questo file esegui  python3 -m http.server  (su Windows:  py -m http.server ) e poi vai su  http://localhost:8000/"+encodeURIComponent("estrattore-zip-annidati.html"));
+    return;
+  }
+
+  const opt={
+    maxComp:clamp(parseInt($("maxComp").value)||100,8,255),
+    maxTotal:clamp(parseInt($("maxTotal").value)||200,40,400),
+    sanitize:$("sanitize").checked
+  };
+
+  let dirHandle=null;
+  if(HAS_FS){
+    try{ dirHandle=await window.showDirectoryPicker({mode:"readwrite"}); }
+    catch(e){ return; } // l'utente ha annullato
+  }
+
+  setBusy(true);
+  $("progFill").style.width=""; $("progPct").textContent="";
+  $("prog").classList.add("indet");
+  $("progLbl").textContent="Apertura dell'archivio…";
+
+  try{
+    // file "fresco" dall'handle (snapshot nuovo); altrimenti il File trascinato
+    let file=pickedFile;
+    if(pickedHandle){ try{ file=await pickedHandle.getFile(); }catch(e){} }
+
+    // accesso casuale: legge solo l'indice, poi i file a richiesta. Niente caricamento integrale.
+    const reader=new zip.ZipReader(new zip.BlobReader(file));
+    let rootEntries;
+    try{ rootEntries=await reader.getEntries(); }
+    catch(err){
+      setBusy(false);
+      showBanner("err",friendlyRead(err)+" Verifica che il file sia uno ZIP valido e non sia aperto in un altro programma.");
+      return;
+    }
+
+    const ctx=newRun(dirHandle);
+    await processEntries(ctx,rootEntries,[],opt);   // estrae e scrive file-per-file
+    try{ await reader.close(); }catch(e){}
+
+    if(!ctx.files){ setBusy(false); showBanner("warn","Lo ZIP non contiene file estraibili."); return; }
+
+    const info={src:pickedFile.name,files:ctx.files,zips:ctx.zips,maxComp:opt.maxComp,maxTotal:opt.maxTotal,sanitize:opt.sanitize};
+    const report=buildReport(ctx.log,info);
+
+    if(dirHandle){
+      try{ const rh=await dirHandle.getFileHandle("_rinomina_log.txt",{create:true}); const w=await rh.createWritable(); await w.write(report); await w.close(); }catch(e){}
+      setBusy(false);
+      renderResult(info,ctx.log,null);
+    }else{
+      $("prog").classList.remove("indet");
+      $("progLbl").textContent="Creazione ZIP corretto…";
+      await ctx.zipWriter.add("_rinomina_log.txt",new zip.TextReader(report));
+      const blob=await ctx.zipWriter.close();
+      setBusy(false);
+      renderResult(info,ctx.log,blob);
+    }
+  }catch(err){
+    console.error(err); setBusy(false);
+    showBanner("err","Errore durante l'elaborazione: "+friendlyRead(err));
+  }
+}
+
+/* ---------- UI esito ---------- */
+function setBusy(b){ $("go").disabled=b||!pickedFile; $("prog").classList.toggle("on",b); if(!b)$("prog").classList.remove("indet"); if(b){$("out").classList.remove("on");} }
+function resetOutput(){ $("out").classList.remove("on"); $("prog").classList.remove("on"); }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+function renderResult(info,log,zipBlob){
+  $("out").classList.add("on");
+  const dirsRenamed=log.filter(e=>e.type==="dir").length;
+  if(zipBlob){
+    const url=URL.createObjectURL(zipBlob);
+    const base=info.src.replace(/\.zip$/i,"");
+    showBanner("ok",`ZIP corretto pronto. <a class="dl" download="${base}_corretto.zip" href="${url}">Scarica ${base}_corretto.zip</a> — poi estrailo normalmente.`,true);
+  }else{
+    showBanner("ok","Estrazione completata nella cartella scelta. Il log è in <span style='font-family:var(--mono)'>_rinomina_log.txt</span>.");
+  }
+  $("stats").innerHTML="";
+  stat($("stats"),info.files,"file estratti");
+  stat($("stats"),info.zips,"ZIP annidati");
+  stat($("stats"),log.length,"nomi rinominati",log.length>0);
+  stat($("stats"),info.maxTotal,"limite percorso");
+
+  const list=$("loglist"); list.innerHTML="";
+  $("logCount").textContent=log.length?log.length+(log.length===1?" voce":" voci")+(dirsRenamed?` · ${dirsRenamed} cartelle`:""):"";
+  if(!log.length){ list.innerHTML='<div class="empty">Nessun nome superava i limiti: gerarchia copiata invariata.</div>'; return; }
+
+  const scale=Math.max(info.maxTotal,...log.map(e=>e.o.length))*1.05;
+  const limitPct=(info.maxTotal/scale*100).toFixed(1);
+  const CAP=600;
+  log.slice(0,CAP).forEach(e=>{
+    const oPct=(e.o.length/scale*100).toFixed(1), nPct=(e.n.length/scale*100).toFixed(1);
+    const li=document.createElement("div"); li.className="li";
+    li.innerHTML=
+      `<div class="top"><span class="chip ${e.type}">${e.type==="dir"?"cartella":"file"}</span></div>`+
+      `<div class="names o">${esc(e.o)}</div>`+
+      `<div class="names"><span class="arr">↓ </span><span class="n">${esc(e.n)}</span></div>`+
+      `<div class="meter">`+
+        `<div class="mlbl"><span>prima ${e.o.length}</span><span>limite ${info.maxTotal}</span></div>`+
+        `<div class="mline old"><span class="mlimit" style="left:${limitPct}%"></span><i style="width:${oPct}%"></i></div>`+
+        `<div class="mline new"><span class="mlimit" style="left:${limitPct}%"></span><i style="width:${nPct}%"></i></div>`+
+        `<div class="mlbl"><span>dopo ${e.n.length}</span><span></span></div>`+
+      `</div>`;
+    list.appendChild(li);
+  });
+  if(log.length>CAP){ const m=document.createElement("div"); m.className="empty"; m.textContent=`…e altre ${log.length-CAP} voci. L'elenco completo è nel file _rinomina_log.txt.`; list.appendChild(m); }
+}
+function stat(parent,v,k,flag){ const d=document.createElement("div"); d.className="stat"+(flag?" flag":""); d.innerHTML=`<div class="v">${v}</div><div class="k">${k}</div>`; parent.appendChild(d); }
+function showBanner(kind,html,allowHtml){ const b=$("banner"); b.className="banner "+kind; b.querySelector(".bic").textContent=kind==="ok"?"✓":kind==="err"?"!":"i"; $("bannerTxt").innerHTML=html; $("out").classList.add("on"); }
+function flashError(msg){ $("out").classList.add("on"); showBanner("err",msg); }
+function esc(s){ return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+</script>
+</body>
+</html>

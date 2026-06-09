@@ -296,6 +296,15 @@ function fsSafe(name){
   if(RESERVED.test(n)) n="_"+n;
   return n||"_";
 }
+// Ripiego: nome ridotto ad ASCII sicuro, usato solo se il file system rifiuta l'originale.
+function asciiFallback(name,isFile){
+  let base=name, ext="";
+  if(isFile){ [base,ext]=splitExt(name); }
+  base=base.replace(/[^A-Za-z0-9._-]/g,"_").replace(/^[ ._]+|[ .]+$/g,"");
+  ext=ext.replace(/[^A-Za-z0-9.]/g,"");
+  if(!base) base=(isFile?"file_":"cartella_")+hash4(name);
+  return (base.slice(0,80)+ext) || ("x_"+hash4(name));
+}
 function truncName(name,cap,isFile){
   if(name.length<=cap) return name;
   let base=name, ext="";
@@ -333,7 +342,7 @@ function newRun(dirHandle){
     reg:new Map([["",{used:new Set(),rel:"",finalName:""}]]),
     dirHandles:new Map([["",dirHandle]]),
     zipWriter:dirHandle?null:new zip.ZipWriter(new zip.BlobWriter("application/zip")),
-    log:[], files:0, zips:0
+    log:[], files:0, zips:0, skipped:[]
   };
 }
 async function resolveDir(ctx,origComps,opt){
@@ -343,15 +352,22 @@ async function resolveDir(ctx,origComps,opt){
     let entry=ctx.reg.get(key);
     if(!entry){
       let nm=correctName(orig,false,opt);
-      nm=ensureUnique(nm,parent.used); parent.used.add(nm.toLowerCase());
+      nm=ensureUnique(nm,parent.used);
+      let handle=null;
+      if(ctx.dirHandle){
+        const ph=ctx.dirHandles.get(parent.rel);
+        try{ handle=await ph.getDirectoryHandle(nm,{create:true}); }
+        catch(e){   // nome rifiutato dal file system: ripiego ASCII
+          nm=ensureUnique(asciiFallback(orig,false),parent.used);
+          handle=await ph.getDirectoryHandle(nm,{create:true});
+        }
+      }
+      parent.used.add(nm.toLowerCase());
       const rel=parent.rel?parent.rel+"/"+nm:nm;
       entry={used:new Set(),rel,finalName:nm};
       ctx.reg.set(key,entry);
+      if(handle) ctx.dirHandles.set(rel,handle);
       if(nm!==orig) ctx.log.push({type:"dir",o:parentKey+orig,n:rel});
-    }
-    if(ctx.dirHandle && !ctx.dirHandles.has(entry.rel)){
-      const ph=ctx.dirHandles.get(parent.rel);
-      ctx.dirHandles.set(entry.rel, await ph.getDirectoryHandle(entry.finalName,{create:true}));
     }
     parentKey=key; parent=entry;
   }
@@ -362,16 +378,22 @@ async function emitBlob(ctx,origComps,origName,origFull,blob,opt){
   let nm=correctName(origName,true,opt);
   const fitted=fitTotal(nm,opt.maxTotal-parent.rel.length-1,origName);
   if(fitted!==nm) nm=fsSafe(fitted);
-  nm=ensureUnique(nm,parent.used); parent.used.add(nm.toLowerCase());
-  const rel=parent.rel?parent.rel+"/"+nm:nm;
-  if(nm!==origName) ctx.log.push({type:"file",o:origFull,n:rel});
+  nm=ensureUnique(nm,parent.used);
   if(ctx.dirHandle){
     const dh=ctx.dirHandles.get(parent.rel);
-    const fh=await dh.getFileHandle(nm,{create:true});
+    let fh;
+    try{ fh=await dh.getFileHandle(nm,{create:true}); }
+    catch(e){   // nome rifiutato dal file system: ripiego ASCII
+      nm=ensureUnique(asciiFallback(origName,true),parent.used);
+      fh=await dh.getFileHandle(nm,{create:true});
+    }
     const w=await fh.createWritable(); await w.write(blob); await w.close();
   }else{
-    await ctx.zipWriter.add(rel, new zip.BlobReader(blob));
+    await ctx.zipWriter.add(parent.rel?parent.rel+"/"+nm:nm, new zip.BlobReader(blob));
   }
+  parent.used.add(nm.toLowerCase());
+  const rel=parent.rel?parent.rel+"/"+nm:nm;
+  if(nm!==origName) ctx.log.push({type:"file",o:origFull,n:rel});
   ctx.files++;
   if(ctx.files===1||ctx.files%5===0) $("progLbl").textContent="Estrazione… "+ctx.files+" file";
 }
@@ -384,32 +406,40 @@ async function processEntries(ctx,entries,prefixComps,opt){
     if(fname===undefined) continue;
     const dirComps=prefixComps.concat(comps);
     const origFull=(prefixComps.length?prefixComps.join("/")+"/":"")+entry.filename;
-    // estrae il singolo file (solo questo tenuto in memoria); poi lo scrive
-    const blob=await entry.getData(new zip.BlobWriter());
-    if(/\.zip$/i.test(fname)){
-      let innerReader=new zip.ZipReader(new zip.BlobReader(blob));
-      let innerEntries=null;
-      try{ innerEntries=await innerReader.getEntries(); }catch(e){ innerEntries=null; }
-      if(innerEntries){
-        ctx.zips++;
-        await processEntries(ctx,innerEntries,dirComps.concat([fname.replace(/\.zip$/i,"")]),opt);
-        try{ await innerReader.close(); }catch(e){}
+    try{
+      const blob=await entry.getData(new zip.BlobWriter()); // solo questo file in memoria
+      if(/\.zip$/i.test(fname)){
+        let innerReader=new zip.ZipReader(new zip.BlobReader(blob));
+        let innerEntries=null;
+        try{ innerEntries=await innerReader.getEntries(); }catch(e){ innerEntries=null; }
+        if(innerEntries){
+          ctx.zips++;
+          await processEntries(ctx,innerEntries,dirComps.concat([fname.replace(/\.zip$/i,"")]),opt);
+          try{ await innerReader.close(); }catch(e){}
+        }else{
+          await emitBlob(ctx,dirComps,fname,origFull,blob,opt); // zip illeggibile/protetto: file
+        }
       }else{
-        await emitBlob(ctx,dirComps,fname,origFull,blob,opt); // zip illeggibile/protetto: file
+        await emitBlob(ctx,dirComps,fname,origFull,blob,opt);
       }
-    }else{
-      await emitBlob(ctx,dirComps,fname,origFull,blob,opt);
+    }catch(err){   // un singolo elemento problematico non deve fermare tutto
+      ctx.skipped.push({path:origFull, why:(err&&err.message)||String(err)});
+      console.warn("Saltato:",origFull,err);
     }
   }
 }
 function buildReport(log,info){
   let t="Rapporto rinomina — Estrattore ZIP annidati\n";
   t+="Sorgente: "+info.src+"\n";
-  t+="File estratti: "+info.files+" | ZIP annidati: "+info.zips+" | Rinominati: "+log.length+"\n";
+  t+="File estratti: "+info.files+" | ZIP annidati: "+info.zips+" | Rinominati: "+log.length+" | Saltati: "+(info.skipped?info.skipped.length:0)+"\n";
   t+="Regole: max nome="+info.maxComp+", max percorso="+info.maxTotal+", correzione caratteri="+(info.sanitize?"sì":"no")+"\n";
   t+="".padEnd(60,"-")+"\n\n";
   for(const e of log){ t+="["+(e.type==="dir"?"CARTELLA":"FILE")+"]\n  da : "+e.o+"\n  a  : "+e.n+"\n\n"; }
   if(!log.length) t+="Nessun nome ha richiesto modifiche.\n";
+  if(info.skipped&&info.skipped.length){
+    t+="\n"+"".padEnd(60,"-")+"\nELEMENTI SALTATI (non scritti):\n\n";
+    for(const s of info.skipped){ t+="  "+s.path+"\n    motivo: "+s.why+"\n\n"; }
+  }
   return t;
 }
 
@@ -484,7 +514,7 @@ async function run(){
 
     if(!ctx.files){ setBusy(false); showBanner("warn","Lo ZIP non contiene file estraibili."); return; }
 
-    const info={src:pickedFile.name,files:ctx.files,zips:ctx.zips,maxComp:opt.maxComp,maxTotal:opt.maxTotal,sanitize:opt.sanitize};
+    const info={src:pickedFile.name,files:ctx.files,zips:ctx.zips,maxComp:opt.maxComp,maxTotal:opt.maxTotal,sanitize:opt.sanitize,skipped:ctx.skipped};
     const report=buildReport(ctx.log,info);
 
     if(dirHandle){
@@ -513,10 +543,13 @@ function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function renderResult(info,log,zipBlob){
   $("out").classList.add("on");
   const dirsRenamed=log.filter(e=>e.type==="dir").length;
+  const nSkip=info.skipped?info.skipped.length:0;
   if(zipBlob){
     const url=URL.createObjectURL(zipBlob);
     const base=info.src.replace(/\.zip$/i,"");
-    showBanner("ok",`ZIP corretto pronto. <a class="dl" download="${base}_corretto.zip" href="${url}">Scarica ${base}_corretto.zip</a> — poi estrailo normalmente.`,true);
+    showBanner(nSkip?"warn":"ok",`ZIP corretto pronto. <a class="dl" download="${base}_corretto.zip" href="${url}">Scarica ${base}_corretto.zip</a> — poi estrailo normalmente.`+(nSkip?` Attenzione: ${nSkip} elementi saltati (vedi _rinomina_log.txt).`:""),true);
+  }else if(nSkip){
+    showBanner("warn",`Estrazione completata, ma ${nSkip} elementi sono stati saltati perché il file system li ha rifiutati. L'elenco è in <span style='font-family:var(--mono)'>_rinomina_log.txt</span>.`,true);
   }else{
     showBanner("ok","Estrazione completata nella cartella scelta. Il log è in <span style='font-family:var(--mono)'>_rinomina_log.txt</span>.");
   }
@@ -524,7 +557,8 @@ function renderResult(info,log,zipBlob){
   stat($("stats"),info.files,"file estratti");
   stat($("stats"),info.zips,"ZIP annidati");
   stat($("stats"),log.length,"nomi rinominati",log.length>0);
-  stat($("stats"),info.maxTotal,"limite percorso");
+  if(nSkip) stat($("stats"),nSkip,"saltati",true);
+  else stat($("stats"),info.maxTotal,"limite percorso");
 
   const list=$("loglist"); list.innerHTML="";
   $("logCount").textContent=log.length?log.length+(log.length===1?" voce":" voci")+(dirsRenamed?` · ${dirsRenamed} cartelle`:""):"";

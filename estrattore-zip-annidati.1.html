@@ -289,6 +289,13 @@ function sanitize(name){
   if(RESERVED.test(n)) n="_"+n;
   return n||"_";
 }
+// Normalizzazione SEMPRE applicata: garantisce nomi accettati dal file system del browser.
+function fsSafe(name){
+  let n=name.replace(/[\\/<>:"|?*\x00-\x1f]/g,"_").replace(/[ .]+$/,"");
+  if(n==="."||n==="..") n="_";
+  if(RESERVED.test(n)) n="_"+n;
+  return n||"_";
+}
 function truncName(name,cap,isFile){
   if(name.length<=cap) return name;
   let base=name, ext="";
@@ -301,7 +308,7 @@ function correctName(orig,isFile,opt){
   let n=orig;
   if(opt.sanitize) n=sanitize(n);
   n=truncName(n,opt.maxComp,isFile);
-  return n;
+  return fsSafe(n);   // sempre, anche se la spunta è disattivata
 }
 function fitTotal(name,available,orig){
   if(name.length<=available) return name;
@@ -354,7 +361,7 @@ async function emitBlob(ctx,origComps,origName,origFull,blob,opt){
   const parent=await resolveDir(ctx,origComps,opt);
   let nm=correctName(origName,true,opt);
   const fitted=fitTotal(nm,opt.maxTotal-parent.rel.length-1,origName);
-  if(fitted!==nm) nm=fitted;
+  if(fitted!==nm) nm=fsSafe(fitted);
   nm=ensureUnique(nm,parent.used); parent.used.add(nm.toLowerCase());
   const rel=parent.rel?parent.rel+"/"+nm:nm;
   if(nm!==origName) ctx.log.push({type:"file",o:origFull,n:rel});
@@ -372,7 +379,7 @@ async function emitBlob(ctx,origComps,origName,origFull,blob,opt){
 async function processEntries(ctx,entries,prefixComps,opt){
   for(const entry of entries){
     if(entry.directory) continue;
-    const comps=entry.filename.split("/").filter(Boolean);
+    const comps=entry.filename.replace(/\\/g,"/").split("/").filter(Boolean);
     const fname=comps.pop();
     if(fname===undefined) continue;
     const dirComps=prefixComps.concat(comps);
